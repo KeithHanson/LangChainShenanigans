@@ -4,45 +4,56 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from mmpy_bot import Plugin, listen_to
+
 from mmpy_bot import Message
 
-from langchain.agents import Tool
-from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationChain
+
 from langchain.chat_models import ChatOpenAI
-from langchain.utilities import SerpAPIWrapper
-from langchain.agents import initialize_agent
-from langchain.agents import AgentType
 
-SERPAPI_API_KEY = os.environ["SERPAPI_API_KEY"]
+from langchain.embeddings import OpenAIEmbeddings
 
-search = SerpAPIWrapper(serpapi_api_key=SERPAPI_API_KEY)
-tools = [
-    Tool(
-        name = "Current Search",
-        func=search.run,
-        description="useful for when you need to answer questions about current events or the current state of the world. the input to this should be a single search term."
-    ),
-]
+from langchain.memory import VectorStoreRetrieverMemory
 
-memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+from langchain.vectorstores.pgvector import PGVector, DistanceStrategy
 
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+connection_string = PGVector.connection_string_from_db_params(
+    driver="psycopg",
+    host="localhost",
+    port="5432",
+    database="langchain",
+    user="postgres",
+    password="postgresql"
+)
 
-llm=ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0)
+llm=ChatOpenAI(temperature=0)
+embeddings = OpenAIEmbeddings()
 
-agent_chain = initialize_agent(tools, llm, agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION, verbose=True, memory=memory)
+vectorstore = PGVector(
+    connection_string=connection_string,
+    embedding_function=embeddings,
+    collection_name='default_chat_history_new',
+    distance_strategy=DistanceStrategy.COSINE
+)
 
+retriever = vectorstore.as_retriever()
+
+memory = VectorStoreRetrieverMemory(retriever=retriever)
+
+agent_chain = ConversationChain(
+    llm=llm,
+    memory=memory,
+    verbose=True)
 
 class Default(Plugin):
     @listen_to("(.*?)")
     async def everything(self, message: Message):
-        #self.driver.reply_to(message, message.text)
-        #self.driver.create_post(message.channel_id, "Hai!")
         if message.text.startswith("#"):
             return
 
+        if message.user_id == self.driver.user_id:
+            return
+
         self.driver.create_post(message.channel_id, "_relaying to langchain_")
-        output = agent_chain.run(input=message.text)
+        output = agent_chain.run(message.text)
         self.driver.create_post(message.channel_id, output)
-
-
